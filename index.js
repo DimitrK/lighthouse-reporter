@@ -9,67 +9,93 @@ const db = require('./database');
 const fs = require('fs');
 const path = require('path');
 const neat_csv = require('neat-csv');
-
+const USER_AGENT = 'Mozilla/5.0 (Linux; Android 7.0; Moto G (4)) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/98.0.4695.0 Mobile Safari/537.36';
 // Is this a recurring report or no?
 let should_repeat = false;
 
 // For how long should this URL automatically be reported on?
-let auto_report_lifetime = 90; // Days
+let auto_report_lifetime = 10; // minutes
 
 // How frequently should this report be rerun
-let auto_report_interval = 30; // Days between reports
+let auto_report_interval = 1; // minutes between reports
 
-let jobId = '';
+let jobId = "";
 
 // Get the JOB ID provided by Jarvis (if applicable)
 for (const arg of process.argv) {
-  if (arg.startsWith('job-id')) {
-    jobId = arg.split('=')[1];
+  if (arg.startsWith("job-id")) {
+    jobId = arg.split("=")[1];
   }
 }
 
 // Validate arguments
-if (isNaN(auto_report_interval) || isNaN(auto_report_lifetime) ||
-                auto_report_interval < 1 || auto_report_lifetime < 1) {
-  console.log('$$$Sorry, please check your input.');
+if (
+  isNaN(auto_report_interval) ||
+  isNaN(auto_report_lifetime) ||
+  auto_report_interval < 1 ||
+  auto_report_lifetime < 1
+) {
+  console.log("$$$Sorry, please check your input.");
   process.exit(1);
 }
 
 // Lighthouse options
 const options = {
-  chromeFlags: ['--headless', '--disable-dev-shm-usage', '--no-sandbox']
+  chromeFlags: [
+    "--headless",
+    "--disable-dev-shm-usage",
+    "--no-sandbox",
+    `--user-agent="${USER_AGENT}"`,
+  ],
 };
 
 // A config, don't know what it does
 const config = {
-  extends: 'lighthouse:default',
+  extends: "lighthouse:default",
   settings: {
     throttling: {
-      cpuSlowdownMultiplier: 2
-    }
-  }
+      cpuSlowdownMultiplier: 2,
+    },
+    formFactor: "mobile",
+    throttlingMethod: "simulate",
+    emulatedUserAgent: USER_AGENT,
+  },
 };
 
-// Perform the audit (returns the final report, if successful)
-function performAudit (url, opts, config = null) {
-  return chrome_launcher.launch({ chromeFlags: opts.chromeFlags }).then(chrome => {
-    opts.port = chrome.port;
+const headers = require("./headers.json");
 
-    return lighthouse(url, opts, config).then(results => {
-      return chrome.kill().then(() => results.lhr).catch(err => console.error(err));
-    }).catch(up => {
-      console.log('Killing Chrome to prevent hanging.');
-      chrome.kill(); // <-- Kill chrome anyway
-      throw up; // <- ha ha
+if (jobId && headers[jobId]) {
+  config.settings.extraHeaders = headers[jobId];
+}
+
+// Perform the audit (returns the final report, if successful)
+function performAudit(url, opts, config = null) {
+  return chrome_launcher
+    .launch({ chromeFlags: opts.chromeFlags })
+    .then((chrome) => {
+      opts.port = chrome.port;
+
+      return lighthouse(url, opts, config)
+        .then((results) => {
+          return chrome
+            .kill()
+            .then(() => results.lhr)
+            .catch((err) => console.error(err));
+        })
+        .catch((up) => {
+          console.log("Killing Chrome to prevent hanging.");
+          chrome.kill(); // <-- Kill chrome anyway
+          throw up; // <- ha ha
+        });
+    })
+    .catch((downTheGauntlet) => {
+      throw downTheGauntlet; // <-- CHALLENGE ACCEPTED
     });
-  }).catch(downTheGauntlet => {
-    throw downTheGauntlet; // <-- CHALLENGE ACCEPTED
-  });
 }
 
 // Take a list of urls and templates and do the whole reporting thing
 // Generate report, then parse and store in the database
-async function doReporting (urls_and_templates, budgets) {
+async function doReporting(urls_and_templates, budgets) {
   // Loop through all of the urls and templates
   for (let i = 0; i < urls_and_templates.length; i++) {
     // Get the URL and Template
@@ -77,9 +103,9 @@ async function doReporting (urls_and_templates, budgets) {
     let template;
 
     for (const prop in urls_and_templates[i]) {
-      if (prop.toLowerCase().includes('url')) {
+      if (prop.toLowerCase().includes("url")) {
         url = urls_and_templates[i][prop];
-      } else if (prop.toLowerCase().includes('template')) {
+      } else if (prop.toLowerCase().includes("template")) {
         template = urls_and_templates[i][prop];
       }
     }
@@ -96,9 +122,9 @@ async function doReporting (urls_and_templates, budgets) {
       const report = await performAudit(url, options, config);
 
       // Check for errors and proceed if all is well
-      if (report['runtimeError'] != null) {
-        console.error(report['runtimeError']['message']);
-      }else{
+      if (report["runtimeError"] != null) {
+        console.error(report["runtimeError"]["message"]);
+      } else {
         // Generate insert the report into the database tables
         await parseReportAndStore(url, template, report);
       }
@@ -109,37 +135,44 @@ async function doReporting (urls_and_templates, budgets) {
 }
 
 // This function parses the report and stores in the correct tables
-async function parseReportAndStore (url, template, report) {
+async function parseReportAndStore(url, template, report) {
   // Get the values as needed
-  const fetch_time = report['fetchTime'];
-  let page_size = report['audits']['total-byte-weight']['numericValue'];
-  const first_contentful_paint = report['audits']['first-contentful-paint']['numericValue'];
-  const max_potential_fid = report['audits']['max-potential-fid']['numericValue'];
-  const time_to_interactive = report['audits']['interactive']['numericValue'];
-  const first_meaningful_paint = report['audits']['first-meaningful-paint']['numericValue'];
-  const first_cpu_idle = report['audits']['first-cpu-idle']['numericValue'];
-  const largest_contentful_paint = report['audits']['largest-contentful-paint']['numericValue'];
-  const cumulative_layout_shift = report['audits']['cumulative-layout-shift']['numericValue'];
-  const total_blocking_time = report['audits']['total-blocking-time']['numericValue'];
-  const speed_index = report['audits']['speed-index']['numericValue'];
+  const fetch_time = report["fetchTime"];
+  let page_size = report["audits"]["total-byte-weight"]["numericValue"];
+  const first_contentful_paint =
+    report["audits"]["first-contentful-paint"]["numericValue"];
+  const max_potential_fid =
+    report["audits"]["max-potential-fid"]["numericValue"];
+  const time_to_interactive = report["audits"]["interactive"]["numericValue"];
+  const first_meaningful_paint =
+    report["audits"]["first-meaningful-paint"]["numericValue"];
+  // const first_cpu_idle = report['audits']['first-cpu-idle']['numericValue'];
+  const largest_contentful_paint =
+    report["audits"]["largest-contentful-paint"]["numericValue"];
+  const cumulative_layout_shift =
+    report["audits"]["cumulative-layout-shift"]["numericValue"];
+  const total_blocking_time =
+    report["audits"]["total-blocking-time"]["numericValue"];
+  const speed_index = report["audits"]["speed-index"]["numericValue"];
 
   // These are lists and will have to be iterated
-  const network_resources = report['audits']['network-requests']['details']['items'];
+  const network_resources =
+    report["audits"]["network-requests"]["details"]["items"];
   const savings_opportunities = [];
 
   // Loop through the audits to find savings opportunities
-  for (const audit_name in report['audits']) {
-    if (!report['audits'].hasOwnProperty(audit_name)) {
+  for (const audit_name in report["audits"]) {
+    if (!report["audits"].hasOwnProperty(audit_name)) {
       continue; // <-- Sanity check
     }
 
-    const audit = report['audits'][audit_name];
+    const audit = report["audits"][audit_name];
 
-    if (audit.hasOwnProperty('details') && audit['details'] != null) {
-      if (audit['details']['type'] == 'opportunity') {
+    if (audit.hasOwnProperty("details") && audit["details"] != null) {
+      if (audit["details"]["type"] == "opportunity") {
         savings_opportunities.push({
-          audit_text: audit['title'],
-          estimated_savings: audit['details']['overallSavingsMs']
+          audit_text: audit["title"],
+          estimated_savings: audit["details"]["overallSavingsMs"],
         });
       }
     }
@@ -157,81 +190,95 @@ async function parseReportAndStore (url, template, report) {
   //  dom-size
 
   // Main thread work breakdown
-  if (report['audits']['mainthread-work-breakdown']['score'] != 1 &&
-      report['audits']['mainthread-work-breakdown']['score'] != undefined) {
-        report['audits']['mainthread-work-breakdown']['details']['items'].forEach(item => {
-          current_list_of_items.push({
-            label: item['groupLabel'],
-            value: item['duration']
-          });
+  if (
+    report["audits"]["mainthread-work-breakdown"]["score"] != 1 &&
+    report["audits"]["mainthread-work-breakdown"]["score"] != undefined
+  ) {
+    report["audits"]["mainthread-work-breakdown"]["details"]["items"].forEach(
+      (item) => {
+        current_list_of_items.push({
+          label: item["groupLabel"],
+          value: item["duration"],
         });
+      }
+    );
   }
   diagnostics.push({
-    diagnostic_id: 'mainthread-work-breakdown',
+    diagnostic_id: "mainthread-work-breakdown",
     items: current_list_of_items,
   });
   current_list_of_items = [];
 
   // bootup-time
-  if (report['audits']['bootup-time']['score'] != 1 &&
-      report['audits']['bootup-time']['score'] != undefined) {
-        report['audits']['bootup-time']['details']['items'].forEach(item => {
-          current_list_of_items.push({
-            label: item['url'],
-            value: item['total']
-          });
-        });
+  if (
+    report["audits"]["bootup-time"]["score"] != 1 &&
+    report["audits"]["bootup-time"]["score"] != undefined
+  ) {
+    report["audits"]["bootup-time"]["details"]["items"].forEach((item) => {
+      current_list_of_items.push({
+        label: item["url"],
+        value: item["total"],
+      });
+    });
   }
   diagnostics.push({
-    diagnostic_id: 'bootup-time',
+    diagnostic_id: "bootup-time",
     items: current_list_of_items,
   });
   current_list_of_items = [];
 
   // font-display
-  if (report['audits']['font-display']['score'] != 1 &&
-      report['audits']['font-display']['score'] != undefined) {
-        report['audits']['font-display']['details']['items'].forEach(item => {
-          current_list_of_items.push({
-            label: item['url'],
-            value: item['wastedMs']
-          });
-        });
+  if (
+    report["audits"]["font-display"]["score"] != 1 &&
+    report["audits"]["font-display"]["score"] != undefined
+  ) {
+    report["audits"]["font-display"]["details"]["items"].forEach((item) => {
+      current_list_of_items.push({
+        label: item["url"],
+        value: item["wastedMs"],
+      });
+    });
   }
   diagnostics.push({
-    diagnostic_id: 'font-display',
+    diagnostic_id: "font-display",
     items: current_list_of_items,
   });
   current_list_of_items = [];
 
   // third-party-summary
-  if (report['audits']['third-party-summary']['score'] != 1 &&
-      report['audits']['third-party-summary']['score'] != undefined) {
-        report['audits']['third-party-summary']['details']['items'].forEach(item => {
-          current_list_of_items.push({
-            label: item['entity']['text'],
-            value: item['blockingTime']
-          });
+  if (
+    report["audits"]["third-party-summary"]["score"] != 1 &&
+    report["audits"]["third-party-summary"]["score"] != undefined
+  ) {
+    report["audits"]["third-party-summary"]["details"]["items"].forEach(
+      (item) => {
+        current_list_of_items.push({
+          label: item["entity"]["text"],
+          value: item["blockingTime"],
         });
+      }
+    );
   }
   diagnostics.push({
-    diagnostic_id: 'third-party-summary',
+    diagnostic_id: "third-party-summary",
     items: current_list_of_items,
   });
   current_list_of_items = [];
 
   // dom-size
-  if (report['audits']['dom-size']['score'] != 1 &&
-      report['audits']['dom-size']['score'] != undefined) {
-        report['audits']['dom-size']['details']['items'].forEach(item => {
-          current_list_of_items.push({
-            label: item['statistic'],
-            value: item['value']
-          });
-        });
+  if (
+    report["audits"]["dom-size"]["score"] != 1 &&
+    report["audits"]["dom-size"]["score"] != undefined
+  ) {
+    report["audits"]["dom-size"]["details"]["items"].forEach((item) => {
+      current_list_of_items.push({
+        label: item["statistic"],
+        value: item["value"],
+      });
+    });
   }
   diagnostics.push({
-    diagnostic_id: 'dom-size',
+    diagnostic_id: "dom-size",
     items: current_list_of_items,
   });
 
@@ -239,32 +286,40 @@ async function parseReportAndStore (url, template, report) {
   const performance_budget = [];
   const timing_budget = [];
 
-  if (report['audits']['performance-budget'] && report['audits']['performance-budget']['details']) {
-    for (const item of report['audits']['performance-budget']['details']['items']) {
-      const item_label = item['label'];
-      const item_request_count = item['requestCount'] || 0;
-      const item_transfer_size = item['transferSize'] || 0;
+  if (
+    report["audits"]["performance-budget"] &&
+    report["audits"]["performance-budget"]["details"]
+  ) {
+    for (const item of report["audits"]["performance-budget"]["details"][
+      "items"
+    ]) {
+      const item_label = item["label"];
+      const item_request_count = item["requestCount"] || 0;
+      const item_transfer_size = item["transferSize"] || 0;
       let item_count_over_budget = 0;
-      if (item['countOverBudget'] != null) {
-        item_count_over_budget = item['countOverBudget'].replace(/\D/g, '')
+      if (item["countOverBudget"] != null) {
+        item_count_over_budget = item["countOverBudget"].replace(/\D/g, "");
       }
-      const item_size_over_budget = item['sizeOverBudget'] || 0;
+      const item_size_over_budget = item["sizeOverBudget"] || 0;
 
       performance_budget.push({
         item_label,
         item_request_count,
         item_transfer_size,
         item_count_over_budget,
-        item_size_over_budget
+        item_size_over_budget,
       });
     }
   }
 
-  if (report['audits']['timing-budget'] && report['audits']['timing-budget']['details']) {
-    for (const item of report['audits']['timing-budget']['details']['items']) {
-      const item_label = item['label'];
-      const item_measurement = item['measurement'] || 0;
-      const item_over_budget = item['overBudget'] || 0;
+  if (
+    report["audits"]["timing-budget"] &&
+    report["audits"]["timing-budget"]["details"]
+  ) {
+    for (const item of report["audits"]["timing-budget"]["details"]["items"]) {
+      const item_label = item["label"];
+      const item_measurement = item["measurement"] || 0;
+      const item_over_budget = item["overBudget"] || 0;
 
       timing_budget.push({
         item_label,
@@ -298,7 +353,6 @@ async function parseReportAndStore (url, template, report) {
                                               max_potential_fid,
                                               time_to_interactive,
                                               first_meaningful_paint,
-                                              first_cpu_idle,
                                               largest_contentful_paint,
                                               cumulative_layout_shift,
                                               total_blocking_time,
@@ -306,7 +360,7 @@ async function parseReportAndStore (url, template, report) {
                                               job_id
                                             )
                                             VALUES (
-                                              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14
+                                              $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13
                                             )`;
 
   const resource_chart_query_text = `INSERT INTO resource_chart (
@@ -349,13 +403,7 @@ async function parseReportAndStore (url, template, report) {
                                                         )`;
 
   // Prepare the params for the queries
-  let raw_reports_query_params = [
-    url,
-    template,
-    fetch_time,
-    report,
-    jobId
-  ];
+  let raw_reports_query_params = [url, template, fetch_time, report, jobId];
 
   let gds_audit_query_params = [
     url,
@@ -366,12 +414,11 @@ async function parseReportAndStore (url, template, report) {
     max_potential_fid,
     time_to_interactive,
     first_meaningful_paint,
-    first_cpu_idle,
     largest_contentful_paint,
     cumulative_layout_shift,
     total_blocking_time,
     speed_index,
-    jobId
+    jobId,
   ];
 
   // Store async query promises here
@@ -386,23 +433,26 @@ async function parseReportAndStore (url, template, report) {
     const resource = network_resources[i];
 
     // Filter undefined resource types
-    let resource_type = resource['resourceType'];
+    let resource_type = resource["resourceType"];
     if (resource_type == null) {
-      resource_type = 'Other';
+      resource_type = "Other";
     }
 
     const resource_chart_query_params = [
       url,
       template,
       fetch_time,
-      resource['url'],
+      resource["url"],
       resource_type,
-      resource['startTime'],
-      resource['endTime'],
-      jobId
+      resource["startTime"],
+      resource["endTime"],
+      jobId,
     ];
-    let qPromise = db.query(resource_chart_query_text, resource_chart_query_params);
-    queryPromises.push(qPromise)
+    let qPromise = db.query(
+      resource_chart_query_text,
+      resource_chart_query_params
+    );
+    queryPromises.push(qPromise);
   }
 
   // Insert each savings opportunity into the correct table
@@ -413,39 +463,39 @@ async function parseReportAndStore (url, template, report) {
       url,
       template,
       fetch_time,
-      opportunity['audit_text'],
-      opportunity['estimated_savings'],
-      jobId
+      opportunity["audit_text"],
+      opportunity["estimated_savings"],
+      jobId,
     ];
-    let qPromise = db.query(savings_opportunities_query_text, savings_opportunities_query_params);
-    queryPromises.push(qPromise)
+    // let qPromise = db.query(savings_opportunities_query_text, savings_opportunities_query_params);
+    // queryPromises.push(qPromise)
   }
 
   // Insert each diagnostic audit into the correct table
   for (let i = 0; i < diagnostics.length; i++) {
     const diag = diagnostics[i];
 
-    for (let j = 0; j < diag['items'].length; j++) {
-      const item = diag['items'][j];
+    for (let j = 0; j < diag["items"].length; j++) {
+      const item = diag["items"][j];
 
       const diagnostics_query_params = [
         url,
         template,
         fetch_time,
-        diag['diagnostic_id'],
-        item['label'],
-        item['value'],
-        jobId
+        diag["diagnostic_id"],
+        item["label"],
+        item["value"],
+        jobId,
       ];
 
       let qPromise = db.query(diagnostics_query_text, diagnostics_query_params);
-      queryPromises.push(qPromise)
+      queryPromises.push(qPromise);
     }
   }
 
   // Disconnect when all promises have finished
   await Promise.all(queryPromises);
-  console.log('Promises have returned');
+  console.log("Promises have returned");
 }
 
 // Process a file
@@ -501,30 +551,36 @@ async function processFile (file_path, budgets) {
 }
 
 async function doAutomaticReporting () {
-  console.log('No file provided, doing automatic reporting...');
+  console.log("No file provided, doing automatic reporting...");
 
   // Read all URLs that need updating from the database
-  // If the latest date is longer ago than the interval in days, we need to update
-  const db_rows_that_need_updating = await db.query(`SELECT * FROM urls WHERE latest_date < now() - (interval::varchar(255) || 'days')::interval`);
+  // If the latest date is longer ago than the interval in minutes, we need to update
+  const db_rows_that_need_updating = await db.query(
+    `SELECT * FROM urls WHERE latest_date < now() - (interval::varchar(255) || 'minutes')::interval`
+  );
   const urls_that_need_updating = [];
 
-  db_rows_that_need_updating['rows'].forEach(async row => {
+  db_rows_that_need_updating["rows"].forEach(async (row) => {
     urls_that_need_updating.push({
-      URL: row['url'],
-      Template: row['template'],
+      URL: row["url"],
+      Template: row["template"],
     });
 
     // Update the latest date for this report
-    await db.query(`UPDATE urls SET latest_date = CURRENT_DATE WHERE id = $1`, [ row['id'] ]);
+    await db.query(`UPDATE urls SET latest_date = CURRENT_DATE WHERE id = $1`, [
+      row["id"],
+    ]);
   });
 
   await doReporting(urls_that_need_updating);
 
   // Now delete all the URLs that need deleting
-  console.log('Cleaning up old URLs from the DB...');
-  await db.query(`DELETE FROM urls WHERE start_date < now() - (lifetime::varchar(255) || 'days')::interval`);
+  console.log("Cleaning up old URLs from the DB...");
+  await db.query(
+    `DELETE FROM urls WHERE start_date < now() - (lifetime::varchar(255) || 'minutes')::interval`
+  );
 
-  console.log('Done automatically reporting!');
+  console.log("Done automatically reporting!");
 
   db.disconnect();
 }

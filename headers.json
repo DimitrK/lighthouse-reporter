@@ -1,0 +1,8 @@
+{
+    "analytics-yes": {
+        "Cookie": "__hs_opt_out=no"
+    },
+    "analytics-no": {
+        "Cookie":"__hs_opt_out=yes"
+    }
+}
